@@ -18,8 +18,7 @@ const TILES = ['🍎', '🍊', '🍋', '🍉', '🍇', '🍓', '🍒', '🍑', '
                '🐶', '🐱', '🐰', '🐻', '🐼', '🐸', '🐷', '🐵', '🐥', '🐙'];
 
 const COMBO_WINDOW = 4;
-const stageTime = (n) => Math.max(100, 200 - (n - 1) * 20);
-const HINTS = 3, SHUFFLES = 2;
+const stageTime = (n) => L.stageParams(n).time;      // 단계별 난이도(그림 종류·패 수·시간·힌트)는 logic.js 의 stageParams
 
 // 캔버스 안 버튼 (힌트·섞기)
 const BTN = {
@@ -103,6 +102,7 @@ const sfx = {
   pick: () => tone(660, 0.05, 'triangle', 0.08),
   nope: () => tone(190, 0.12, 'square', 0.05, -50),
   match: (n) => { tone(620 + Math.min(n, 10) * 60, 0.08, 'sine', 0.12, 200); setTimeout(() => tone(930 + Math.min(n, 10) * 60, 0.1, 'sine', 0.1), 60); },
+  tally: (i, n) => tone(520 + (i / Math.max(1, n)) * 620, 0.06, 'triangle', 0.08),
   hint: () => tone(880, 0.15, 'sine', 0.08, 300),
   shuffle: () => [0, 1, 2, 3].forEach((k) => setTimeout(() => tone(400 + k * 90, 0.05, 'triangle', 0.06), k * 45)),
   tick: () => tone(1000, 0.05, 'square', 0.05),
@@ -112,9 +112,12 @@ const sfx = {
 
 // ---------- 상태 ----------
 let state = 'title';          // title | play | paused | clear | over
-let grid = L.deal();
+let grid = L.deal(Math.random, L.stageParams(1));
 let stage = 1, score = 0, best = Number(store.get('sacheonBest')) || 0;
-let time = stageTime(1), hints = HINTS, shuffles = SHUFFLES;
+let sp = L.stageParams(1);                           // 지금 단계의 설정
+let time = sp.time, hints = sp.hints, shuffles = sp.shuffles;
+let deadT = 0;
+let tally = null;                                    // 클리어 후 남은 시간이 점수로 바뀌는 중 { secs, rate, conv, acc, wait }
 let combo = 0, maxCombo = 0, lastMatch = -99, matched = 0;
 let picked = null;
 let links = [];               // 이어진 선 { path, t }
@@ -125,10 +128,11 @@ let hint = null, hintT = 0;
 let clock = 0;
 
 function startStage() {
-  grid = L.deal();
-  time = stageTime(stage); hints = HINTS; shuffles = SHUFFLES;
+  sp = L.stageParams(stage);
+  grid = L.deal(Math.random, sp);
+  time = sp.time; hints = sp.hints; shuffles = sp.shuffles; tally = null;
   picked = null; links = []; ghosts = []; shakes = []; hint = null; combo = 0; lastMatch = -99;
-  banner = { text: `${stage}단계`, t: 0 };
+  banner = { text: `${stage}단계`, sub: `그림 ${sp.kinds}종 · 패 ${sp.tiles}개`, t: 0 };
   state = 'play';
   hideOverlay();
   updateHud();
@@ -184,8 +188,17 @@ function match(a, b, p) {
   sfx.match(combo);
 
   if (L.left(grid) === 0) return stageClear();
-  // 더 이을 수 있는 짝이 없으면 공짜로 섞어 준다
-  if (!L.findPair(grid)) { L.reshuffle(grid); banner = { text: '막혔어요! 섞는 중', t: 0, small: true }; sfx.shuffle(); }
+  ensureMoves();
+}
+
+// 더 이을 수 있는 짝이 없으면 (직접 섞은 뒤든, 짝을 깬 뒤든 언제나) 공짜로 자동으로 다시 섞어 준다. 섞기 횟수는 쓰지 않는다.
+function ensureMoves() {
+  if (state !== 'play' || L.left(grid) === 0 || L.findPair(grid)) return false;
+  for (let i = 0; i < 6 && !L.findPair(grid); i++) L.reshuffle(grid);
+  picked = null; hint = null;
+  banner = { text: '막혔어요! 섞는 중', t: 0, small: true };
+  sfx.shuffle();
+  return true;
 }
 
 function addScore(n) {
@@ -207,22 +220,40 @@ function useShuffle() {
   L.reshuffle(grid);
   banner = { text: '섞기!', t: 0, small: true };
   sfx.shuffle();
+  ensureMoves();                       // 섞고 났더니 이을 짝이 없으면 바로 한 번 더
 }
 
 function stageClear() {
   state = 'clear';
-  const bonus = Math.ceil(time) * 10;
-  addScore(bonus);
+  picked = null; hint = null;
+  // 남은 시간은 1초당 점수로 바뀐다 (단계가 오를수록 1초의 값이 커진다). 바뀌는 모습이 화면에 보이게 하나씩 센다.
+  const secs = Math.ceil(time), rate = L.bonusRate(stage);
+  tally = { secs, rate, conv: 0, acc: 0, wait: 0.5 };
+  time = secs;
   sfx.clear();
-  setTimeout(() => showOverlay(`
+}
+// 환산 중에 화면을 누르거나 Space·Enter 를 누르면 남은 만큼 한 번에 더하고 결과 창으로
+function skipTally() {
+  if (state !== 'clear' || !tally || tally.shown) return;
+  const rest = tally.secs - tally.conv;
+  if (rest > 0) addScore(rest * tally.rate);
+  tally.conv = tally.secs; time = 0; tally.shown = true;
+  showClearOverlay();
+}
+// 환산이 끝난 뒤 결과 창
+function showClearOverlay() {
+  const t = tally, nx = L.stageParams(stage + 1);
+  showOverlay(`
     <h2 class="inked">${stage}단계 클리어!</h2>
     <div class="big inked">${score.toLocaleString()}</div>
-    <span class="tag">남은 시간 보너스 +${bonus.toLocaleString()}</span>
+    <span class="tag">⏱ 남은 ${t.secs}초 × ${t.rate}점 = +${(t.secs * t.rate).toLocaleString()}</span>
     <div class="card"><dl class="stats">
       <dt>최대 콤보</dt><dd>${maxCombo}</dd>
-      <dt>다음 단계 시간</dt><dd>${stageTime(stage + 1)}초</dd>
+      <dt>다음 단계</dt><dd>그림 ${nx.kinds}종 · 패 ${nx.tiles}개</dd>
+      <dt>주어지는 시간</dt><dd>${nx.time}초</dd>
+      <dt>힌트 · 섞기</dt><dd>${nx.hints}번 · ${nx.shuffles}번</dd>
     </dl></div>
-    <button id="startBtn">다음 단계</button>`), 700);
+    <button id="startBtn">다음 단계</button>`);
 }
 
 function gameOver() {
@@ -256,6 +287,21 @@ function update(dt) {
   for (const s of shakes) s.t += dt;
   shakes = shakes.filter((s) => s.t < 0.35);
   if (banner) { banner.t += dt; if (banner.t > 1.2) banner = null; }
+  if (state === 'clear' && tally) {
+    if (tally.wait > 0) tally.wait -= dt;
+    else if (tally.conv < tally.secs) {
+      // 1.5초 안에 끝나도록 (남은 시간이 길수록 빨리 센다). 센 만큼 시간 막대가 줄고 점수가 오른다
+      tally.acc += dt * Math.max(14, tally.secs / 1.5);
+      while (tally.acc >= 1 && tally.conv < tally.secs) {
+        tally.acc -= 1; tally.conv++;
+        time = tally.secs - tally.conv;
+        addScore(tally.rate);
+        sfx.tally(tally.conv, tally.secs);
+        if (tally.conv % 5 === 0) particles.push({ x: 254, y: 24, vx: (Math.random() - 0.5) * 80, vy: -60, life: 0.5, col: '#ffd23f' });
+      }
+      if (tally.conv >= tally.secs) tally.wait = 0.6;
+    } else if (!tally.shown) { tally.shown = true; showClearOverlay(); }
+  }
   if (state !== 'play') return;
 
   const prev = Math.ceil(time);
@@ -263,6 +309,8 @@ function update(dt) {
   if (time < 10 && Math.ceil(time) < prev && time > 0) sfx.tick();
   if (clock - lastMatch > COMBO_WINDOW) combo = 0;
   if (hint) { hintT += dt; if (hintT > 4) hint = null; }
+  deadT += dt;
+  if (deadT > 0.5) { deadT = 0; ensureMoves(); }       // 혹시 막혀 있으면 반 초 안에 알아서 섞는다
   if (time <= 0) gameOver();
 }
 
@@ -292,7 +340,7 @@ function draw() {
   ctx.clearRect(0, 0, W, H);
 
   // 시간 막대
-  const total = stageTime(stage);
+  const total = sp.time;
   panel(6, 10, 270, 28, 14, '#ffffff', 4);
   const tr = time / total, low = time < 15;
   const g = ctx.createLinearGradient(0, 13, 0, 35);
@@ -305,6 +353,7 @@ function draw() {
 
   // 단계 · 남은 패 · 콤보
   label(`${stage}단계`, 10, 62, 18, '#ffd23f', 'left');
+  label(`그림 ${sp.kinds}종`, 76, 62, 13, '#ffe9a0', 'left');
   label(`남은 패 ${L.left(grid)}`, W - 10, 62, 16, '#fff', 'right');
   if (combo >= 2) label(`${combo} 콤보`, W / 2, 62, 18, '#ff9ecb');
 
@@ -369,7 +418,18 @@ function draw() {
     const s = 1 + Math.max(0, 0.25 - banner.t) * 1.6;
     ctx.save(); ctx.globalAlpha = Math.min(1, (1.2 - banner.t) * 3);
     ctx.translate(W / 2, BY + ROWS * CH / 2); ctx.scale(s, s);
-    label(banner.text, 0, 0, banner.small ? 30 : 46, '#ffd23f');
+    label(banner.text, 0, banner.sub ? -14 : 0, banner.small ? 30 : 46, '#ffd23f');
+    if (banner.sub) label(banner.sub, 0, 30, 17, '#fff');
+    ctx.restore();
+  }
+  // 클리어 뒤 남은 시간이 점수로 바뀌는 중
+  if (state === 'clear' && tally) {
+    const gain = tally.conv * tally.rate;
+    ctx.save(); ctx.translate(W / 2, BY + ROWS * CH / 2);
+    ctx.fillStyle = 'rgba(43,29,82,.72)'; roundRect(ctx, -150, -62, 300, 124, 24); ctx.fill();
+    label('시간 → 점수!', 0, -36, 22, '#fff');
+    label(`+${gain.toLocaleString()}`, 0, 6, 46, '#ffd23f');
+    label(`남은 ${tally.secs - tally.conv}초 × ${tally.rate}점`, 0, 44, 16, '#ffe9a0');
     ctx.restore();
   }
 }
@@ -415,6 +475,7 @@ function toLogical(e) {
 }
 const hitBtn = (b, p) => p.x >= b.x - 3 && p.x <= b.x + b.w + 3 && p.y >= b.y - 4 && p.y <= b.y + b.h + 6;
 canvas.addEventListener('pointerdown', (e) => {
+  if (state === 'clear') return skipTally();
   if (state !== 'play') return;
   const p = toLogical(e);
   if (hitBtn(BTN.hint, p)) return useHint();
@@ -430,6 +491,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyM') toggleMute();
   if (e.code === 'KeyH') useHint();
   if (e.code === 'KeyS') useShuffle();
+  if ((e.code === 'Enter' || e.code === 'Space') && state === 'clear' && tally && !tally.shown) { e.preventDefault(); skipTally(); return; }
   if ((e.code === 'Enter' || e.code === 'Space') && !$('overlay').classList.contains('hidden')) { e.preventDefault(); onOverlayButton(); }
 });
 addEventListener('blur', pause);
@@ -451,5 +513,5 @@ requestAnimationFrame(frame);
 
 // 테스트용
 window.__sc = { get grid() { return grid; }, get state() { return state; }, get score() { return score; }, get stage() { return stage; },
-  get picked() { return picked; }, get time() { return time; }, tapCell, update, draw, startGame, onOverlayButton, useHint, useShuffle, BX, BY, CW, CH, W, H };
+  get picked() { return picked; }, get time() { return time; }, get tally() { return tally; }, get sp() { return sp; }, skipTally, ensureMoves, tapCell, update, draw, startGame, onOverlayButton, useHint, useShuffle, BX, BY, CW, CH, W, H };
 })();
