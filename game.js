@@ -371,15 +371,29 @@ function draw() {
     if (k === -1) continue;
     let x = BX + c * CW, y = BY + r * CH;
     const sel = picked && picked[0] === r && picked[1] === c;
+    if (sel) continue;                                  // 고른 패는 맨 위에 따로 그린다 (아래 참고)
     const sh = shakes.find((s) => s.r === r && s.c === c);
     if (sh) x += Math.sin(sh.t * 60) * 4 * (1 - sh.t / 0.35);
-    if (sel) y -= 4;
     ctx.drawImage(sprites[k], x, y, CW, CH);
     const isHint = hintOn && ((hint.a[0] === r && hint.a[1] === c) || (hint.b[0] === r && hint.b[1] === c));
-    if (sel || isHint) {
-      ctx.lineWidth = 4; ctx.strokeStyle = sel ? '#ffd23f' : '#ff5fa2';
+    if (isHint) {
+      ctx.lineWidth = 4; ctx.strokeStyle = '#ff5fa2';
       roundRect(ctx, x + 1, y + 1, CW - 2, CH - 7, 10); ctx.stroke();
     }
+  }
+  // 고른 패: 이웃 패보다 크게(1.22배) 띄워서 맨 위에 그린다. 패가 작아서 어느 걸 골랐는지 잘 안 보이던 것
+  if (picked && grid[picked[0]][picked[1]] !== -1) {
+    const [r, c] = picked, k = grid[r][c];
+    const sh = shakes.find((s) => s.r === r && s.c === c);
+    const x = BX + c * CW + (sh ? Math.sin(sh.t * 60) * 4 * (1 - sh.t / 0.35) : 0), y = BY + r * CH;
+    const S = 1.22, pw = CW * S, ph = CH * S;
+    const px = x + CW / 2 - pw / 2, py = y + CH / 2 - ph / 2 - 5;
+    ctx.save();
+    ctx.shadowColor = 'rgba(43,29,82,.5)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 5;
+    ctx.drawImage(sprites[k], px, py, pw, ph);
+    ctx.restore();
+    ctx.lineWidth = 4.5; ctx.strokeStyle = '#ffd23f';
+    roundRect(ctx, px + 1, py + 1, pw - 2, ph - 7 * S, 12); ctx.stroke();
   }
   // 사라지는 패
   for (const gh of ghosts) {
