@@ -511,7 +511,9 @@ updateHud();
 fit();
 requestAnimationFrame(frame);
 
+/* @test-hooks:start */
 // 테스트용
 window.__sc = { get grid() { return grid; }, get state() { return state; }, get score() { return score; }, get stage() { return stage; },
   get picked() { return picked; }, get time() { return time; }, get tally() { return tally; }, get sp() { return sp; }, skipTally, ensureMoves, tapCell, update, draw, startGame, onOverlayButton, useHint, useShuffle, BX, BY, CW, CH, W, H };
+/* @test-hooks:end */
 })();
