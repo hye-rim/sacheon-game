@@ -29,9 +29,12 @@
   #hud .item {
     display:flex; align-items:baseline; gap:5px; white-space:nowrap;
     background:#fff; border:3px solid var(--ink); border-radius:999px; box-shadow:0 4px 0 var(--ink);
-    padding:2px 12px;
+    padding:2px 12px; overflow:hidden; min-width:0;   /* 숫자가 길어져도 알약 밖으로 나가지 않게 (game.js 가 글자 크기를 줄여 맞춘다) */
   }
-  #hud .item:first-child { background:var(--yellow); flex:1; min-width:0; }
+  /* 남는 폭을 점수 3 : 최고 기록 2 로 나눈다 (예전엔 최고 기록 알약이 숫자만큼 늘어나서 점수 알약이 눌렸다) */
+  #hud .item:first-child { background:var(--yellow); flex:3 1 0; min-width:0; }
+  #hud .item:nth-child(2) { flex:2 1 0; }
+  #hud .item.nolabel .label { display:none; }
   #hud .label { font-size:11px; color:var(--muted); }
   #hud .value { font-size:21px; }
   #hud .icons { display:flex; gap:6px; margin-left:auto; }

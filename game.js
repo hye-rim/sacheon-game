@@ -46,7 +46,7 @@ function fit() {
   $('wrap').style.margin = '0 auto';
   buildSprites(canvas.width / W);
 }
-addEventListener('resize', fit);
+addEventListener('resize', () => { fit(); updateHud(); });
 
 function roundRect(c, x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
@@ -448,9 +448,20 @@ function draw() {
   }
 }
 
+// 점수 숫자가 길어지면 알약 안에 들어갈 때까지 글자를 줄인다 (예전엔 알약 밖으로 삐져나왔다)
+function fitValue(el) {
+  const item = el.parentElement;
+  const over = () => item.scrollWidth > item.clientWidth + 0.5;
+  el.style.fontSize = ''; item.classList.remove('nolabel');
+  let fs = parseFloat(getComputedStyle(el).fontSize) || 21;
+  while (over() && fs > 15) { fs -= 1; el.style.fontSize = fs + 'px'; }           // 먼저 글자를 줄이고
+  if (over()) item.classList.add('nolabel');                                       // 그래도 넘치면 SCORE·BEST 이름표를 감춘다
+  while (over() && fs > 11) { fs -= 1; el.style.fontSize = fs + 'px'; }           // 마지막으로 더 줄인다
+}
 function updateHud() {
   $('score').textContent = score.toLocaleString();
   $('best').textContent = best.toLocaleString();
+  fitValue($('score')); fitValue($('best'));
 }
 
 // ---------- 루프 ----------
@@ -527,7 +538,7 @@ requestAnimationFrame(frame);
 
 /* @test-hooks:start */
 // 테스트용
-window.__sc = { get grid() { return grid; }, get state() { return state; }, get score() { return score; }, get stage() { return stage; },
+window.__sc = { get grid() { return grid; }, get state() { return state; }, get score() { return score; }, set score(v) { score = v; updateHud(); }, get stage() { return stage; },
   get picked() { return picked; }, get time() { return time; }, get tally() { return tally; }, get sp() { return sp; }, skipTally, ensureMoves, tapCell, update, draw, startGame, onOverlayButton, useHint, useShuffle, BX, BY, CW, CH, W, H };
 /* @test-hooks:end */
 })();
